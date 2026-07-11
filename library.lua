@@ -281,12 +281,18 @@ function SkeetUI:CreateWindow(titleText)
                 end
             end
 
+            -- НАСТОЯЩИЙ ВЫПАДАЮЩИЙ COLORPICKER
             function Section:CreateColorPicker(text, defaultColor, cb)
                 local Frame = Instance.new("Frame", SectionInner)
                 Frame.Size = UDim2.new(1, 0, 0, 20)
                 Frame.BackgroundTransparency = 1
+                Frame.ClipsDescendants = true -- Скрываем выпадающее меню, пока оно закрыто
                 
-                local Lbl = Instance.new("TextLabel", Frame)
+                local TopBar = Instance.new("Frame", Frame)
+                TopBar.Size = UDim2.new(1, 0, 0, 20)
+                TopBar.BackgroundTransparency = 1
+                
+                local Lbl = Instance.new("TextLabel", TopBar)
                 Lbl.Size = UDim2.new(1, -30, 1, 0)
                 Lbl.BackgroundTransparency = 1
                 Lbl.Text = text
@@ -295,7 +301,7 @@ function SkeetUI:CreateWindow(titleText)
                 Lbl.Font = Enum.Font.Code
                 Lbl.TextXAlignment = Enum.TextXAlignment.Left
                 
-                local ColorBtnOut = Instance.new("Frame", Frame)
+                local ColorBtnOut = Instance.new("Frame", TopBar)
                 ColorBtnOut.Size = UDim2.new(0, 30, 0, 14)
                 ColorBtnOut.Position = UDim2.new(1, -30, 0, 3)
                 ColorBtnOut.BackgroundColor3 = Colors.OuterBorder
@@ -305,18 +311,73 @@ function SkeetUI:CreateWindow(titleText)
                 ColorBtn.BackgroundColor3 = defaultColor
                 ColorBtn.Text = ""
                 
-                -- Inline RGB Sliders directly into the section automatically
-                local r, g, b = defaultColor.R*255, defaultColor.G*255, defaultColor.B*255
+                -- Выпадающая часть с ползунками
+                local DropMenu = Instance.new("Frame", Frame)
+                DropMenu.Size = UDim2.new(1, 0, 0, 95)
+                DropMenu.Position = UDim2.new(0, 0, 0, 20)
+                DropMenu.BackgroundTransparency = 1
+                local DropLayout = Instance.new("UIListLayout", DropMenu)
+                DropLayout.Padding = UDim.new(0, 2)
+                
+                local isOpen = false
+                ColorBtn.MouseButton1Click:Connect(function()
+                    isOpen = not isOpen
+                    Frame.Size = isOpen and UDim2.new(1, 0, 0, 115) or UDim2.new(1, 0, 0, 20)
+                end)
+                
+                local r, g, b = math.floor(defaultColor.R*255), math.floor(defaultColor.G*255), math.floor(defaultColor.B*255)
                 
                 local function updateCol()
                     local c = Color3.fromRGB(r, g, b)
                     ColorBtn.BackgroundColor3 = c
                     if cb then cb(c) end
                 end
-                
-                Section:CreateSlider(text.." R", 0, 255, r, function(v) r=v updateCol() end)
-                Section:CreateSlider(text.." G", 0, 255, g, function(v) g=v updateCol() end)
-                Section:CreateSlider(text.." B", 0, 255, b, function(v) b=v updateCol() end)
+
+                -- Мини-слайдер для пикера
+                local function createMiniSlider(lblText, defVal, callback)
+                    local SFrame = Instance.new("Frame", DropMenu)
+                    SFrame.Size = UDim2.new(1, 0, 0, 28)
+                    SFrame.BackgroundTransparency = 1
+                    local SLbl = Instance.new("TextLabel", SFrame)
+                    SLbl.Size = UDim2.new(1, 0, 0, 12)
+                    SLbl.BackgroundTransparency = 1
+                    SLbl.Text = lblText .. " : " .. defVal
+                    SLbl.TextColor3 = Colors.TextDark
+                    SLbl.TextSize = 10
+                    SLbl.Font = Enum.Font.Code
+                    SLbl.TextXAlignment = Enum.TextXAlignment.Left
+                    
+                    local SOut = Instance.new("Frame", SFrame)
+                    SOut.Size = UDim2.new(1, 0, 0, 10)
+                    SOut.Position = UDim2.new(0, 0, 0, 14)
+                    SOut.BackgroundColor3 = Colors.OuterBorder
+                    local SIn = Instance.new("TextButton", SOut)
+                    SIn.Size = UDim2.new(1, -2, 1, -2)
+                    SIn.Position = UDim2.new(0, 1, 0, 1)
+                    SIn.BackgroundColor3 = Colors.InnerBackground
+                    SIn.Text = ""
+                    local SFill = Instance.new("Frame", SIn)
+                    SFill.Size = UDim2.new(defVal/255, 0, 1, 0)
+                    SFill.BackgroundColor3 = Colors.Accent
+                    SFill.BorderSizePixel = 0
+                    
+                    local sDrag = false
+                    SIn.InputBegan:Connect(function(i) if i.UserInputType == Enum.UserInputType.MouseButton1 then sDrag = true end end)
+                    UserInputService.InputEnded:Connect(function(i) if i.UserInputType == Enum.UserInputType.MouseButton1 then sDrag = false end end)
+                    UserInputService.InputChanged:Connect(function(i)
+                        if sDrag and i.UserInputType == Enum.UserInputType.MouseMovement then
+                            local pct = math.clamp((i.Position.X - SIn.AbsolutePosition.X) / SIn.AbsoluteSize.X, 0, 1)
+                            local val = math.floor(pct * 255)
+                            SFill.Size = UDim2.new(pct, 0, 1, 0)
+                            SLbl.Text = lblText .. " : " .. val
+                            callback(val)
+                        end
+                    end)
+                end
+
+                createMiniSlider("Red", r, function(v) r = v updateCol() end)
+                createMiniSlider("Green", g, function(v) g = v updateCol() end)
+                createMiniSlider("Blue", b, function(v) b = v updateCol() end)
             end
 
             function Section:CreateButton(text, cb)
