@@ -1,403 +1,790 @@
-local SkeetUI = {}
-local CoreGui = game:GetService("CoreGui")
+--[[
+    SkeetUI v2 — gamesense/skeet style UI library for Roblox
+    Элементы: Checkbox (+keybind ПКМ), Slider, Dropdown, MultiDropdown,
+    ColorPicker (SV + Hue), Keybind, Button, Textbox, Label
+    Анимации: TweenService (hover, fill, open/close, fade)
+    Открытие/закрытие меню: RightShift
+]]
+
+local SkeetUI = { flags = {} }
+
+local TweenService     = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
+local RunService       = game:GetService("RunService")
+local CoreGui          = game:GetService("CoreGui")
 
 if CoreGui:FindFirstChild("SkeetUI") then CoreGui.SkeetUI:Destroy() end
 
 local Colors = {
-    Background = Color3.fromRGB(23, 23, 23),
-    InnerBackground = Color3.fromRGB(30, 30, 30),
-    OuterBorder = Color3.fromRGB(0, 0, 0),
-    InnerBorder = Color3.fromRGB(45, 45, 45),
-    Text = Color3.fromRGB(255, 255, 255),
-    TextDark = Color3.fromRGB(150, 150, 150),
-    Accent = Color3.fromRGB(143, 197, 8)
+    Background      = Color3.fromRGB(17, 17, 17),
+    Groupbox        = Color3.fromRGB(17, 17, 17),
+    Element         = Color3.fromRGB(35, 35, 35),
+    ElementHover    = Color3.fromRGB(45, 45, 45),
+    OuterBorder     = Color3.fromRGB(0, 0, 0),
+    MidBorder       = Color3.fromRGB(60, 60, 60),
+    InnerBorder     = Color3.fromRGB(40, 40, 40),
+    Text            = Color3.fromRGB(205, 205, 205),
+    TextDark        = Color3.fromRGB(110, 110, 110),
+    TextActive      = Color3.fromRGB(255, 255, 255),
+    Accent          = Color3.fromRGB(149, 184, 66), -- фирменный skeet-зелёный
 }
 
+local FONT, TEXTSIZE = Enum.Font.Code, 12
+local TWEEN_FAST  = TweenInfo.new(0.10, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+local TWEEN_MED   = TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+
+-- ============ helpers ============
+local function Create(class, props, parent)
+    local obj = Instance.new(class)
+    for k, v in pairs(props) do obj[k] = v end
+    if parent then obj.Parent = parent end
+    return obj
+end
+
+local function Tween(obj, props, info)
+    local t = TweenService:Create(obj, info or TWEEN_FAST, props)
+    t:Play()
+    return t
+end
+
+-- классическая skeet-рамка: чёрный -> серый -> чёрный -> контент
+local function TripleBorder(parent, size, pos)
+    local outer = Create("Frame", {
+        Size = size, Position = pos,
+        BackgroundColor3 = Colors.OuterBorder, BorderSizePixel = 0,
+    }, parent)
+    local mid = Create("Frame", {
+        Size = UDim2.new(1, -2, 1, -2), Position = UDim2.new(0, 1, 0, 1),
+        BackgroundColor3 = Colors.MidBorder, BorderSizePixel = 0,
+    }, outer)
+    local inner = Create("Frame", {
+        Size = UDim2.new(1, -2, 1, -2), Position = UDim2.new(0, 1, 0, 1),
+        BackgroundColor3 = Colors.OuterBorder, BorderSizePixel = 0,
+    }, mid)
+    local content = Create("Frame", {
+        Size = UDim2.new(1, -2, 1, -2), Position = UDim2.new(0, 1, 0, 1),
+        BackgroundColor3 = Colors.Background, BorderSizePixel = 0,
+    }, inner)
+    return outer, content
+end
+
+local function Label(parent, text, props)
+    local l = Create("TextLabel", {
+        BackgroundTransparency = 1, Text = text,
+        TextColor3 = Colors.Text, TextSize = TEXTSIZE, Font = FONT,
+        TextXAlignment = Enum.TextXAlignment.Left,
+    }, parent)
+    for k, v in pairs(props or {}) do l[k] = v end
+    return l
+end
+
+-- ============ window ============
 function SkeetUI:CreateWindow(titleText)
-    local Window = {Tabs = {}, CurrentTab = nil}
-    local ScreenGui = Instance.new("ScreenGui", CoreGui)
-    ScreenGui.Name = "SkeetUI"
-    ScreenGui.ResetOnSpawn = false
+    local Window = { Tabs = {}, CurrentTab = nil, Open = true }
 
-    local MainBorder = Instance.new("Frame", ScreenGui)
-    MainBorder.Size = UDim2.new(0, 500, 0, 450)
-    MainBorder.Position = UDim2.new(0.5, -250, 0.5, -225)
-    MainBorder.BackgroundColor3 = Colors.OuterBorder
-    MainBorder.BorderSizePixel = 0
+    local ScreenGui = Create("ScreenGui", {
+        Name = "SkeetUI", ResetOnSpawn = false,
+        ZIndexBehavior = Enum.ZIndexBehavior.Global,
+    }, CoreGui)
 
-    local dragInput, dragStart, startPos
-    MainBorder.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 then
-            dragStart, startPos = input.Position, MainBorder.Position
-            input.Changed:Connect(function() if input.UserInputState == Enum.UserInputState.End then dragStart = nil end end)
+    -- слой для выпадающих списков/пикеров поверх всего
+    local Overlay = Create("Frame", {
+        Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, ZIndex = 100,
+    }, ScreenGui)
+
+    local Root, Main = TripleBorder(ScreenGui,
+        UDim2.new(0, 560, 0, 480), UDim2.new(0.5, -280, 0.5, -240))
+
+    -- лёгкий вертикальный градиент фона как у skeet
+    Create("UIGradient", {
+        Rotation = 90,
+        Color = ColorSequence.new(Color3.fromRGB(25, 25, 25), Color3.fromRGB(12, 12, 12)),
+    }, Main)
+
+    -- фирменная градиентная полоса сверху
+    local TopLine = Create("Frame", {
+        Size = UDim2.new(1, 0, 0, 2), BackgroundColor3 = Color3.new(1, 1, 1),
+        BorderSizePixel = 0, ZIndex = 2,
+    }, Main)
+    Create("UIGradient", {
+        Color = ColorSequence.new({
+            ColorSequenceKeypoint.new(0.00, Color3.fromRGB(59, 175, 222)),
+            ColorSequenceKeypoint.new(0.25, Color3.fromRGB(102, 211, 111)),
+            ColorSequenceKeypoint.new(0.50, Color3.fromRGB(201, 227, 88)),
+            ColorSequenceKeypoint.new(0.75, Color3.fromRGB(202, 70, 205)),
+            ColorSequenceKeypoint.new(1.00, Color3.fromRGB(59, 175, 222)),
+        }),
+    }, TopLine)
+    -- анимация переливания градиента
+    task.spawn(function()
+        local g = TopLine:FindFirstChildOfClass("UIGradient")
+        while TopLine.Parent do
+            g.Offset = Vector2.new((tick() * 0.15) % 1, 0)
+            task.wait()
         end
     end)
-    MainBorder.InputChanged:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseMovement then dragInput = input end
-    end)
-    UserInputService.InputChanged:Connect(function(input)
-        if input == dragInput and dragStart then
-            local delta = input.Position - dragStart
-            MainBorder.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+
+    -- drag за верхнюю зону
+    do
+        local dragging, dragStart, startPos
+        Main.InputBegan:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1
+            and input.Position.Y - Main.AbsolutePosition.Y < 30 then
+                dragging, dragStart, startPos = true, input.Position, Root.Position
+            end
+        end)
+        UserInputService.InputEnded:Connect(function(i)
+            if i.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end
+        end)
+        UserInputService.InputChanged:Connect(function(i)
+            if dragging and i.UserInputType == Enum.UserInputType.MouseMovement then
+                local d = i.Position - dragStart
+                Root.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X,
+                                          startPos.Y.Scale, startPos.Y.Offset + d.Y)
+            end
+        end)
+    end
+
+    Label(Main, titleText or "skeet.cc", {
+        Size = UDim2.new(0, 200, 0, 24), Position = UDim2.new(0, 10, 0, 4),
+        TextColor3 = Colors.TextActive, ZIndex = 2,
+    })
+
+    -- вертикальная колонка табов слева (как у gamesense)
+    local TabColumn = Create("Frame", {
+        Size = UDim2.new(0, 76, 1, -34), Position = UDim2.new(0, 0, 0, 30),
+        BackgroundColor3 = Color3.fromRGB(12, 12, 12), BorderSizePixel = 0,
+    }, Main)
+    Create("Frame", { -- разделитель
+        Size = UDim2.new(0, 1, 1, 0), Position = UDim2.new(1, 0, 0, 0),
+        BackgroundColor3 = Colors.MidBorder, BorderSizePixel = 0,
+    }, TabColumn)
+    local TabLayout = Create("UIListLayout", {
+        Padding = UDim.new(0, 0), SortOrder = Enum.SortOrder.LayoutOrder,
+    }, TabColumn)
+    Create("UIPadding", { PaddingTop = UDim.new(0, 10) }, TabColumn)
+
+    local ContentArea = Create("Frame", {
+        Size = UDim2.new(1, -89, 1, -44), Position = UDim2.new(0, 83, 0, 36),
+        BackgroundTransparency = 1,
+    }, Main)
+
+    -- открытие/закрытие меню
+    UserInputService.InputBegan:Connect(function(input, gpe)
+        if gpe then return end
+        if input.KeyCode == Enum.KeyCode.RightShift then
+            Window.Open = not Window.Open
+            Root.Visible = true
+            if Window.Open then
+                Root.Size = UDim2.new(0, 560, 0, 0)
+                Tween(Root, { Size = UDim2.new(0, 560, 0, 480) }, TWEEN_MED)
+            else
+                Tween(Root, { Size = UDim2.new(0, 560, 0, 0) }, TWEEN_MED)
+                    .Completed:Wait()
+                Root.Visible = false
+                Overlay.Visible = false
+            end
         end
     end)
 
-    local MainFrame = Instance.new("Frame", MainBorder)
-    MainFrame.Size = UDim2.new(1, -2, 1, -2)
-    MainFrame.Position = UDim2.new(0, 1, 0, 1)
-    MainFrame.BackgroundColor3 = Colors.Background
-    MainFrame.BorderColor3 = Colors.InnerBorder
-    MainFrame.BorderSizePixel = 1
+    -- ============ dropdown overlay manager ============
+    local currentPopup
+    local function ClosePopup()
+        if currentPopup then currentPopup:Destroy() currentPopup = nil end
+    end
+    UserInputService.InputBegan:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.MouseButton1 and currentPopup then
+            local p, s = currentPopup.AbsolutePosition, currentPopup.AbsoluteSize
+            local m = UserInputService:GetMouseLocation()
+            if m.X < p.X or m.X > p.X + s.X or m.Y < p.Y or m.Y > p.Y + s.Y - 36 then
+                task.wait() ClosePopup()
+            end
+        end
+    end)
 
-    local TopLine = Instance.new("Frame", MainFrame)
-    TopLine.Size = UDim2.new(1, 0, 0, 2)
-    TopLine.BorderSizePixel = 0
-    local Gradient = Instance.new("UIGradient", TopLine)
-    Gradient.Color = ColorSequence.new{
-        ColorSequenceKeypoint.new(0.00, Color3.fromRGB(59, 175, 222)),
-        ColorSequenceKeypoint.new(0.50, Color3.fromRGB(202, 70, 205)),
-        ColorSequenceKeypoint.new(1.00, Color3.fromRGB(201, 227, 88))
-    }
-
-    local TabContainer = Instance.new("Frame", MainFrame)
-    TabContainer.Size = UDim2.new(1, -12, 0, 20)
-    TabContainer.Position = UDim2.new(0, 6, 0, 8)
-    TabContainer.BackgroundTransparency = 1
-    local TabLayout = Instance.new("UIListLayout", TabContainer)
-    TabLayout.FillDirection = Enum.FillDirection.Horizontal
-    TabLayout.Padding = UDim.new(0, 2)
-
-    local ContentOuter = Instance.new("Frame", MainFrame)
-    ContentOuter.Size = UDim2.new(1, -12, 1, -38)
-    ContentOuter.Position = UDim2.new(0, 6, 0, 32)
-    ContentOuter.BackgroundColor3 = Colors.OuterBorder
-    ContentOuter.BorderSizePixel = 0
-
-    local ContentInner = Instance.new("Frame", ContentOuter)
-    ContentInner.Size = UDim2.new(1, -2, 1, -2)
-    ContentInner.Position = UDim2.new(0, 1, 0, 1)
-    ContentInner.BackgroundColor3 = Colors.Background
-    ContentInner.BorderColor3 = Colors.InnerBorder
-    ContentInner.BorderSizePixel = 1
-
+    -- ============ tabs ============
     function Window:CreateTab(tabName)
         local Tab = {}
-        local TabBtn = Instance.new("TextButton", TabContainer)
-        TabBtn.Size = UDim2.new(0, 80, 1, 0)
-        TabBtn.BackgroundColor3 = Colors.Background
-        TabBtn.BorderColor3 = Colors.InnerBorder
-        TabBtn.BorderSizePixel = 1
-        TabBtn.Text = tabName
-        TabBtn.TextColor3 = Colors.TextDark
-        TabBtn.TextSize = 11
-        TabBtn.Font = Enum.Font.Code
 
-        local TabPage = Instance.new("ScrollingFrame", ContentInner)
-        TabPage.Size = UDim2.new(1, -10, 1, -10)
-        TabPage.Position = UDim2.new(0, 5, 0, 5)
-        TabPage.BackgroundTransparency = 1
-        TabPage.ScrollBarThickness = 2
-        TabPage.BorderSizePixel = 0
-        TabPage.Visible = false
-        local PageLayout = Instance.new("UIListLayout", TabPage)
-        PageLayout.Padding = UDim.new(0, 10)
+        local TabBtn = Create("TextButton", {
+            Size = UDim2.new(1, 0, 0, 34), BackgroundColor3 = Color3.fromRGB(12, 12, 12),
+            BorderSizePixel = 0, Text = tabName, AutoButtonColor = false,
+            TextColor3 = Colors.TextDark, TextSize = TEXTSIZE, Font = FONT,
+        }, TabColumn)
+        local ActiveBar = Create("Frame", {
+            Size = UDim2.new(0, 2, 1, 0), BackgroundColor3 = Colors.Accent,
+            BorderSizePixel = 0, BackgroundTransparency = 1,
+        }, TabBtn)
 
-        if not Window.CurrentTab then
-            Window.CurrentTab = TabPage
-            TabPage.Visible = true
-            TabBtn.TextColor3 = Colors.Text
+        local TabPage = Create("Frame", {
+            Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, Visible = false,
+        }, ContentArea)
+
+        -- две колонки groupbox'ов
+        local columns = {}
+        for i = 1, 2 do
+            local col = Create("ScrollingFrame", {
+                Size = UDim2.new(0.5, -4, 1, 0),
+                Position = UDim2.new((i - 1) * 0.5, (i - 1) * 4, 0, 0),
+                BackgroundTransparency = 1, BorderSizePixel = 0,
+                ScrollBarThickness = 2, ScrollBarImageColor3 = Colors.MidBorder,
+                CanvasSize = UDim2.new(0, 0, 0, 0),
+            }, TabPage)
+            local lay = Create("UIListLayout", { Padding = UDim.new(0, 10) }, col)
+            lay:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+                col.CanvasSize = UDim2.new(0, 0, 0, lay.AbsoluteContentSize.Y + 10)
+            end)
+            columns[i] = col
         end
 
-        TabBtn.MouseButton1Click:Connect(function()
-            for _, page in pairs(ContentInner:GetChildren()) do if page:IsA("ScrollingFrame") then page.Visible = false end end
-            for _, btn in pairs(TabContainer:GetChildren()) do if btn:IsA("TextButton") then btn.TextColor3 = Colors.TextDark end end
+        local function Select()
+            for _, p in pairs(ContentArea:GetChildren()) do p.Visible = false end
+            for _, b in pairs(TabColumn:GetChildren()) do
+                if b:IsA("TextButton") then
+                    Tween(b, { TextColor3 = Colors.TextDark,
+                               BackgroundColor3 = Color3.fromRGB(12, 12, 12) })
+                    Tween(b:FindFirstChild("Frame"), { BackgroundTransparency = 1 })
+                end
+            end
             TabPage.Visible = true
-            TabBtn.TextColor3 = Colors.Text
+            Tween(TabBtn, { TextColor3 = Colors.TextActive,
+                            BackgroundColor3 = Colors.Background })
+            Tween(ActiveBar, { BackgroundTransparency = 0 })
+            Window.CurrentTab = TabPage
+            ClosePopup()
+        end
+
+        TabBtn.MouseEnter:Connect(function()
+            if Window.CurrentTab ~= TabPage then
+                Tween(TabBtn, { TextColor3 = Colors.Text })
+            end
         end)
+        TabBtn.MouseLeave:Connect(function()
+            if Window.CurrentTab ~= TabPage then
+                Tween(TabBtn, { TextColor3 = Colors.TextDark })
+            end
+        end)
+        TabBtn.MouseButton1Click:Connect(Select)
+        if not Window.CurrentTab then Select() end
 
-        function Tab:CreateSection(sectionName)
+        -- ============ groupbox / section ============
+        function Tab:CreateSection(sectionName, side) -- side: 1 = левая, 2 = правая
             local Section = {}
-            local SectionOuter = Instance.new("Frame", TabPage)
-            SectionOuter.Size = UDim2.new(1, -4, 0, 20)
-            SectionOuter.BackgroundColor3 = Colors.OuterBorder
-            SectionOuter.BorderSizePixel = 0
+            local parentCol = columns[side == 2 and 2 or 1]
 
-            local SectionInner = Instance.new("Frame", SectionOuter)
-            SectionInner.Size = UDim2.new(1, -2, 1, -2)
-            SectionInner.Position = UDim2.new(0, 1, 0, 1)
-            SectionInner.BackgroundColor3 = Colors.InnerBackground
-            SectionInner.BorderColor3 = Colors.InnerBorder
-            SectionInner.BorderSizePixel = 1
+            local Outer, Inner = TripleBorder(parentCol,
+                UDim2.new(1, -6, 0, 40), UDim2.new(0, 0, 0, 0))
+            Inner.BackgroundColor3 = Colors.Groupbox
+            Create("UIGradient", {
+                Rotation = 90,
+                Color = ColorSequence.new(Color3.fromRGB(24, 24, 24), Color3.fromRGB(14, 14, 14)),
+            }, Inner)
 
-            local Title = Instance.new("TextLabel", SectionInner)
-            Title.Size = UDim2.new(1, -10, 0, 14)
-            Title.Position = UDim2.new(0, 5, 0, -7)
-            Title.BackgroundColor3 = Colors.Background
-            Title.Text = " " .. sectionName .. " "
-            Title.TextColor3 = Colors.Text
-            Title.TextSize = 11
-            Title.Font = Enum.Font.Code
-            Title.AutomaticSize = Enum.AutomaticSize.X
+            Label(Inner, " " .. sectionName .. " ", {
+                Position = UDim2.new(0, 10, 0, -7), Size = UDim2.new(0, 10, 0, 13),
+                AutomaticSize = Enum.AutomaticSize.X,
+                BackgroundColor3 = Color3.fromRGB(24, 24, 24),
+                BackgroundTransparency = 0, BorderSizePixel = 0, ZIndex = 3,
+                TextColor3 = Colors.TextActive,
+            })
 
-            local Layout = Instance.new("UIListLayout", SectionInner)
-            Layout.Padding = UDim.new(0, 8)
-            local Pad = Instance.new("UIPadding", SectionInner)
-            Pad.PaddingTop = UDim.new(0, 15)
-            Pad.PaddingLeft = UDim.new(0, 8)
-            Pad.PaddingRight = UDim.new(0, 8)
-            Pad.PaddingBottom = UDim.new(0, 8)
-
+            local Holder = Create("Frame", {
+                Size = UDim2.new(1, -20, 1, -24), Position = UDim2.new(0, 10, 0, 16),
+                BackgroundTransparency = 1,
+            }, Inner)
+            local Layout = Create("UIListLayout", {
+                Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder,
+            }, Holder)
             Layout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
-                SectionOuter.Size = UDim2.new(1, -4, 0, Layout.AbsoluteContentSize.Y + 25)
-                TabPage.CanvasSize = UDim2.new(0, 0, 0, PageLayout.AbsoluteContentSize.Y + 10)
+                Outer.Size = UDim2.new(1, -6, 0, Layout.AbsoluteContentSize.Y + 30)
             end)
 
-            function Section:CreateToggle(text, cb)
-                local toggled = false
-                local Btn = Instance.new("TextButton", SectionInner)
-                Btn.Size = UDim2.new(1, 0, 0, 12)
-                Btn.BackgroundTransparency = 1
-                Btn.Text = ""
-                local Box = Instance.new("Frame", Btn)
-                Box.Size = UDim2.new(0, 12, 0, 12)
-                Box.BackgroundColor3 = Colors.OuterBorder
-                local BoxIn = Instance.new("Frame", Box)
-                BoxIn.Size = UDim2.new(1, -2, 1, -2)
-                BoxIn.Position = UDim2.new(0, 1, 0, 1)
-                BoxIn.BackgroundColor3 = Colors.InnerBackground
-                local Lbl = Instance.new("TextLabel", Btn)
-                Lbl.Size = UDim2.new(1, -20, 1, 0)
-                Lbl.Position = UDim2.new(0, 20, 0, 0)
-                Lbl.BackgroundTransparency = 1
-                Lbl.Text = text
-                Lbl.TextColor3 = Colors.Text
-                Lbl.TextSize = 11
-                Lbl.Font = Enum.Font.Code
-                Lbl.TextXAlignment = Enum.TextXAlignment.Left
-                Btn.MouseButton1Click:Connect(function()
-                    toggled = not toggled
-                    BoxIn.BackgroundColor3 = toggled and Colors.Accent or Colors.InnerBackground
-                    if cb then cb(toggled) end
+            -- ---------- checkbox (с кейбиндом по ПКМ) ----------
+            function Section:AddCheckbox(text, default, cb)
+                local state = default or false
+                local bindKey, bindListening = nil, false
+                SkeetUI.flags[text] = state
+
+                local Row = Create("TextButton", {
+                    Size = UDim2.new(1, 0, 0, 13), BackgroundTransparency = 1,
+                    Text = "", AutoButtonColor = false,
+                }, Holder)
+                local BoxOut = Create("Frame", {
+                    Size = UDim2.new(0, 9, 0, 9), Position = UDim2.new(0, 0, 0, 2),
+                    BackgroundColor3 = Colors.OuterBorder, BorderSizePixel = 0,
+                }, Row)
+                local BoxIn = Create("Frame", {
+                    Size = UDim2.new(1, -2, 1, -2), Position = UDim2.new(0, 1, 0, 1),
+                    BackgroundColor3 = Colors.Element, BorderSizePixel = 0,
+                }, BoxOut)
+                Create("UIGradient", {
+                    Rotation = 90,
+                    Color = ColorSequence.new(Color3.fromRGB(255, 255, 255), Color3.fromRGB(150, 150, 150)),
+                }, BoxIn)
+                local Lbl = Label(Row, text, {
+                    Size = UDim2.new(1, -60, 1, 0), Position = UDim2.new(0, 16, 0, 0),
+                })
+                local BindLbl = Label(Row, "", {
+                    Size = UDim2.new(0, 40, 1, 0), Position = UDim2.new(1, -40, 0, 0),
+                    TextXAlignment = Enum.TextXAlignment.Right, TextColor3 = Colors.TextDark,
+                })
+
+                local function apply(fire)
+                    Tween(BoxIn, { BackgroundColor3 = state and Colors.Accent or Colors.Element })
+                    Tween(Lbl, { TextColor3 = state and Colors.TextActive or Colors.Text })
+                    SkeetUI.flags[text] = state
+                    if fire and cb then cb(state) end
+                end
+
+                Row.MouseEnter:Connect(function()
+                    if not state then Tween(BoxIn, { BackgroundColor3 = Colors.ElementHover }) end
                 end)
+                Row.MouseLeave:Connect(function()
+                    if not state then Tween(BoxIn, { BackgroundColor3 = Colors.Element }) end
+                end)
+                Row.MouseButton1Click:Connect(function()
+                    state = not state
+                    apply(true)
+                end)
+                -- ПКМ — назначить бинд
+                Row.MouseButton2Click:Connect(function()
+                    bindListening = true
+                    BindLbl.Text = "[...]"
+                end)
+                UserInputService.InputBegan:Connect(function(input, gpe)
+                    if bindListening and input.UserInputType == Enum.UserInputType.Keyboard then
+                        bindKey = input.KeyCode ~= Enum.KeyCode.Escape and input.KeyCode or nil
+                        BindLbl.Text = bindKey and ("[" .. bindKey.Name .. "]") or ""
+                        bindListening = false
+                    elseif not gpe and bindKey and input.KeyCode == bindKey then
+                        state = not state
+                        apply(true)
+                    end
+                end)
+                apply(false)
+
+                local api = {}
+                function api:Set(v) state = v apply(true) end
+                function api:Get() return state end
+                return api
             end
 
-            function Section:CreateSlider(text, min, max, def, cb)
-                local val = def or min
-                local Frame = Instance.new("Frame", SectionInner)
-                Frame.Size = UDim2.new(1, 0, 0, 30)
-                Frame.BackgroundTransparency = 1
-                local Lbl = Instance.new("TextLabel", Frame)
-                Lbl.Size = UDim2.new(1, 0, 0, 14)
-                Lbl.BackgroundTransparency = 1
-                Lbl.Text = text .. " : " .. val
-                Lbl.TextColor3 = Colors.Text
-                Lbl.TextSize = 11
-                Lbl.Font = Enum.Font.Code
-                Lbl.TextXAlignment = Enum.TextXAlignment.Left
-                local SliderOut = Instance.new("Frame", Frame)
-                SliderOut.Size = UDim2.new(1, 0, 0, 10)
-                SliderOut.Position = UDim2.new(0, 0, 0, 18)
-                SliderOut.BackgroundColor3 = Colors.OuterBorder
-                local SliderIn = Instance.new("TextButton", SliderOut)
-                SliderIn.Size = UDim2.new(1, -2, 1, -2)
-                SliderIn.Position = UDim2.new(0, 1, 0, 1)
-                SliderIn.BackgroundColor3 = Colors.InnerBackground
-                SliderIn.Text = ""
-                local Fill = Instance.new("Frame", SliderIn)
-                Fill.Size = UDim2.new((val - min)/(max - min), 0, 1, 0)
-                Fill.BackgroundColor3 = Colors.Accent
-                Fill.BorderSizePixel = 0
-                local drag = false
-                SliderIn.InputBegan:Connect(function(i) if i.UserInputType == Enum.UserInputType.MouseButton1 then drag = true end end)
-                UserInputService.InputEnded:Connect(function(i) if i.UserInputType == Enum.UserInputType.MouseButton1 then drag = false end end)
+            -- ---------- slider ----------
+            function Section:AddSlider(text, min, max, default, suffix, cb)
+                local val = math.clamp(default or min, min, max)
+                suffix = suffix or ""
+                SkeetUI.flags[text] = val
+
+                local Frame = Create("Frame", {
+                    Size = UDim2.new(1, 0, 0, 28), BackgroundTransparency = 1,
+                }, Holder)
+                local Lbl = Label(Frame, text, { Size = UDim2.new(1, 0, 0, 13) })
+                local BarOut = Create("Frame", {
+                    Size = UDim2.new(1, 0, 0, 9), Position = UDim2.new(0, 0, 0, 17),
+                    BackgroundColor3 = Colors.OuterBorder, BorderSizePixel = 0,
+                }, Frame)
+                local BarIn = Create("Frame", {
+                    Size = UDim2.new(1, -2, 1, -2), Position = UDim2.new(0, 1, 0, 1),
+                    BackgroundColor3 = Colors.Element, BorderSizePixel = 0,
+                    ClipsDescendants = true,
+                }, BarOut)
+                local Fill = Create("Frame", {
+                    Size = UDim2.new((val - min) / (max - min), 0, 1, 0),
+                    BackgroundColor3 = Colors.Accent, BorderSizePixel = 0,
+                }, BarIn)
+                Create("UIGradient", {
+                    Rotation = 90,
+                    Color = ColorSequence.new(Color3.fromRGB(255, 255, 255), Color3.fromRGB(160, 160, 160)),
+                }, Fill)
+                local ValLbl = Create("TextLabel", {
+                    Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1,
+                    Text = tostring(val) .. suffix, TextColor3 = Colors.TextActive,
+                    TextSize = 10, Font = FONT, ZIndex = 3,
+                }, BarOut)
+
+                local dragging = false
+                local function update(x, fire)
+                    local pct = math.clamp((x - BarIn.AbsolutePosition.X) / BarIn.AbsoluteSize.X, 0, 1)
+                    val = math.floor((min + (max - min) * pct) + 0.5)
+                    pct = (val - min) / (max - min)
+                    Tween(Fill, { Size = UDim2.new(pct, 0, 1, 0) })
+                    ValLbl.Text = tostring(val) .. suffix
+                    SkeetUI.flags[text] = val
+                    if fire and cb then cb(val) end
+                end
+
+                BarOut.InputBegan:Connect(function(i)
+                    if i.UserInputType == Enum.UserInputType.MouseButton1 then
+                        dragging = true
+                        update(i.Position.X, true)
+                    end
+                end)
+                UserInputService.InputEnded:Connect(function(i)
+                    if i.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end
+                end)
                 UserInputService.InputChanged:Connect(function(i)
-                    if drag and i.UserInputType == Enum.UserInputType.MouseMovement then
-                        local pct = math.clamp((i.Position.X - SliderIn.AbsolutePosition.X) / SliderIn.AbsoluteSize.X, 0, 1)
-                        val = math.floor(min + (max - min) * pct)
-                        Fill.Size = UDim2.new(pct, 0, 1, 0)
-                        Lbl.Text = text .. " : " .. val
-                        if cb then cb(val) end
+                    if dragging and i.UserInputType == Enum.UserInputType.MouseMovement then
+                        update(i.Position.X, true)
+                    end
+                end)
+
+                local api = {}
+                function api:Set(v)
+                    val = math.clamp(v, min, max)
+                    Tween(Fill, { Size = UDim2.new((val - min) / (max - min), 0, 1, 0) })
+                    ValLbl.Text = tostring(val) .. suffix
+                    if cb then cb(val) end
+                end
+                function api:Get() return val end
+                return api
+            end
+
+            -- ---------- dropdown (общая база для single/multi) ----------
+            local function BaseDropdown(text, opts, multi, default, cb)
+                local selected = multi and (default or {}) or (default or opts[1])
+
+                local Frame = Create("Frame", {
+                    Size = UDim2.new(1, 0, 0, 34), BackgroundTransparency = 1,
+                }, Holder)
+                Label(Frame, text, { Size = UDim2.new(1, 0, 0, 13) })
+                local BtnOut = Create("Frame", {
+                    Size = UDim2.new(1, 0, 0, 18), Position = UDim2.new(0, 0, 0, 16),
+                    BackgroundColor3 = Colors.OuterBorder, BorderSizePixel = 0,
+                }, Frame)
+                local Btn = Create("TextButton", {
+                    Size = UDim2.new(1, -2, 1, -2), Position = UDim2.new(0, 1, 0, 1),
+                    BackgroundColor3 = Colors.Element, BorderSizePixel = 0,
+                    Text = "", AutoButtonColor = false,
+                }, BtnOut)
+                Create("UIGradient", {
+                    Rotation = 90,
+                    Color = ColorSequence.new(Color3.fromRGB(255, 255, 255), Color3.fromRGB(180, 180, 180)),
+                }, Btn)
+                local SelLbl = Label(Btn, "", {
+                    Size = UDim2.new(1, -24, 1, 0), Position = UDim2.new(0, 6, 0, 0),
+                    TextTruncate = Enum.TextTruncate.AtEnd,
+                })
+                local Arrow = Label(Btn, "▼", {
+                    Size = UDim2.new(0, 14, 1, 0), Position = UDim2.new(1, -16, 0, 0),
+                    TextColor3 = Colors.TextDark, TextSize = 8,
+                    TextXAlignment = Enum.TextXAlignment.Center,
+                })
+
+                local function refreshText()
+                    if multi then
+                        local t = {}
+                        for _, o in ipairs(opts) do
+                            if selected[o] then table.insert(t, o) end
+                        end
+                        SelLbl.Text = #t > 0 and table.concat(t, ", ") or "-"
+                    else
+                        SelLbl.Text = tostring(selected)
+                    end
+                end
+                refreshText()
+
+                Btn.MouseEnter:Connect(function() Tween(Btn, { BackgroundColor3 = Colors.ElementHover }) end)
+                Btn.MouseLeave:Connect(function() Tween(Btn, { BackgroundColor3 = Colors.Element }) end)
+
+                Btn.MouseButton1Click:Connect(function()
+                    if currentPopup then ClosePopup() return end
+                    Arrow.Text = "▲"
+                    local absP, absS = BtnOut.AbsolutePosition, BtnOut.AbsoluteSize
+                    local listH = math.min(#opts, 8) * 18 + 2
+
+                    local Pop = Create("Frame", {
+                        Position = UDim2.new(0, absP.X, 0, absP.Y + absS.Y + 1),
+                        Size = UDim2.new(0, absS.X, 0, 0),
+                        BackgroundColor3 = Colors.OuterBorder, BorderSizePixel = 0,
+                        ClipsDescendants = true, ZIndex = 100,
+                    }, Overlay)
+                    Tween(Pop, { Size = UDim2.new(0, absS.X, 0, listH) }, TWEEN_MED)
+                    Pop.Destroying:Connect(function() Arrow.Text = "▼" end)
+
+                    local List = Create("ScrollingFrame", {
+                        Size = UDim2.new(1, -2, 1, -2), Position = UDim2.new(0, 1, 0, 1),
+                        BackgroundColor3 = Colors.Element, BorderSizePixel = 0,
+                        ScrollBarThickness = 2, ZIndex = 100,
+                        CanvasSize = UDim2.new(0, 0, 0, #opts * 18),
+                    }, Pop)
+                    Create("UIListLayout", {}, List)
+
+                    for _, opt in ipairs(opts) do
+                        local isSel = multi and selected[opt] or (selected == opt)
+                        local OptBtn = Create("TextButton", {
+                            Size = UDim2.new(1, 0, 0, 18), BackgroundColor3 = Colors.Element,
+                            BorderSizePixel = 0, AutoButtonColor = false,
+                            Text = "  " .. opt, TextSize = TEXTSIZE, Font = FONT,
+                            TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 101,
+                            TextColor3 = isSel and Colors.Accent or Colors.TextDark,
+                        }, List)
+                        OptBtn.MouseEnter:Connect(function()
+                            Tween(OptBtn, { BackgroundColor3 = Colors.ElementHover })
+                        end)
+                        OptBtn.MouseLeave:Connect(function()
+                            Tween(OptBtn, { BackgroundColor3 = Colors.Element })
+                        end)
+                        OptBtn.MouseButton1Click:Connect(function()
+                            if multi then
+                                selected[opt] = not selected[opt] or nil
+                                OptBtn.TextColor3 = selected[opt] and Colors.Accent or Colors.TextDark
+                                refreshText()
+                                if cb then cb(selected) end
+                            else
+                                selected = opt
+                                refreshText()
+                                ClosePopup()
+                                if cb then cb(opt) end
+                            end
+                            SkeetUI.flags[text] = selected
+                        end)
+                    end
+                    currentPopup = Pop
+                end)
+
+                local api = {}
+                function api:Get() return selected end
+                function api:Set(v) selected = v refreshText() if cb then cb(v) end end
+                return api
+            end
+
+            function Section:AddDropdown(text, opts, default, cb)
+                return BaseDropdown(text, opts, false, default, cb)
+            end
+            function Section:AddMultiDropdown(text, opts, default, cb)
+                return BaseDropdown(text, opts, true, default, cb)
+            end
+
+            -- ---------- color picker (SV-квадрат + hue) ----------
+            function Section:AddColorPicker(text, defaultColor, cb)
+                local h, s, v = (defaultColor or Colors.Accent):ToHSV()
+
+                local Row = Create("Frame", {
+                    Size = UDim2.new(1, 0, 0, 13), BackgroundTransparency = 1,
+                }, Holder)
+                Label(Row, text, { Size = UDim2.new(1, -32, 1, 0) })
+                local SwOut = Create("Frame", {
+                    Size = UDim2.new(0, 24, 0, 11), Position = UDim2.new(1, -24, 0, 1),
+                    BackgroundColor3 = Colors.OuterBorder, BorderSizePixel = 0,
+                }, Row)
+                local Swatch = Create("TextButton", {
+                    Size = UDim2.new(1, -2, 1, -2), Position = UDim2.new(0, 1, 0, 1),
+                    BackgroundColor3 = Color3.fromHSV(h, s, v), BorderSizePixel = 0,
+                    Text = "", AutoButtonColor = false,
+                }, SwOut)
+                Create("UIGradient", {
+                    Rotation = 90,
+                    Color = ColorSequence.new(Color3.fromRGB(255, 255, 255), Color3.fromRGB(170, 170, 170)),
+                }, Swatch)
+
+                local function fire()
+                    local c = Color3.fromHSV(h, s, v)
+                    Swatch.BackgroundColor3 = c
+                    SkeetUI.flags[text] = c
+                    if cb then cb(c) end
+                end
+
+                Swatch.MouseButton1Click:Connect(function()
+                    if currentPopup then ClosePopup() return end
+                    local absP = SwOut.AbsolutePosition
+
+                    local Pop = Create("Frame", {
+                        Position = UDim2.new(0, absP.X - 150 + 24, 0, absP.Y + 14),
+                        Size = UDim2.new(0, 150, 0, 0),
+                        BackgroundColor3 = Colors.OuterBorder, BorderSizePixel = 0,
+                        ClipsDescendants = true, ZIndex = 100,
+                    }, Overlay)
+                    Tween(Pop, { Size = UDim2.new(0, 150, 0, 132) }, TWEEN_MED)
+
+                    local Inner = Create("Frame", {
+                        Size = UDim2.new(1, -2, 1, -2), Position = UDim2.new(0, 1, 0, 1),
+                        BackgroundColor3 = Colors.Background, BorderSizePixel = 0, ZIndex = 100,
+                    }, Pop)
+
+                    -- SV square
+                    local SV = Create("TextButton", {
+                        Size = UDim2.new(1, -12, 0, 100), Position = UDim2.new(0, 6, 0, 6),
+                        BackgroundColor3 = Color3.fromHSV(h, 1, 1), BorderSizePixel = 0,
+                        Text = "", AutoButtonColor = false, ZIndex = 101,
+                    }, Inner)
+                    local WhiteOv = Create("Frame", {
+                        Size = UDim2.new(1, 0, 1, 0), BorderSizePixel = 0,
+                        BackgroundColor3 = Color3.new(1, 1, 1), ZIndex = 102,
+                    }, SV)
+                    Create("UIGradient", {
+                        Transparency = NumberSequence.new(0, 1),
+                    }, WhiteOv)
+                    local BlackOv = Create("Frame", {
+                        Size = UDim2.new(1, 0, 1, 0), BorderSizePixel = 0,
+                        BackgroundColor3 = Color3.new(0, 0, 0), ZIndex = 103,
+                    }, SV)
+                    Create("UIGradient", {
+                        Rotation = 90, Transparency = NumberSequence.new(1, 0),
+                    }, BlackOv)
+                    local SVCursor = Create("Frame", {
+                        Size = UDim2.new(0, 3, 0, 3), BorderSizePixel = 1,
+                        BorderColor3 = Color3.new(1, 1, 1), BackgroundTransparency = 1,
+                        Position = UDim2.new(s, -1, 1 - v, -1), ZIndex = 104,
+                    }, SV)
+
+                    -- hue bar
+                    local Hue = Create("TextButton", {
+                        Size = UDim2.new(1, -12, 0, 12), Position = UDim2.new(0, 6, 0, 112),
+                        BorderSizePixel = 0, Text = "", AutoButtonColor = false, ZIndex = 101,
+                        BackgroundColor3 = Color3.new(1, 1, 1),
+                    }, Inner)
+                    local hueKeys = {}
+                    for i = 0, 6 do
+                        table.insert(hueKeys, ColorSequenceKeypoint.new(i / 6, Color3.fromHSV(i / 6, 1, 1)))
+                    end
+                    Create("UIGradient", { Color = ColorSequence.new(hueKeys) }, Hue)
+                    local HueCursor = Create("Frame", {
+                        Size = UDim2.new(0, 2, 1, 0), Position = UDim2.new(h, -1, 0, 0),
+                        BackgroundColor3 = Color3.new(1, 1, 1), BorderSizePixel = 0, ZIndex = 102,
+                    }, Hue)
+
+                    local dragSV, dragHue = false, false
+                    SV.InputBegan:Connect(function(i)
+                        if i.UserInputType == Enum.UserInputType.MouseButton1 then dragSV = true end
+                    end)
+                    Hue.InputBegan:Connect(function(i)
+                        if i.UserInputType == Enum.UserInputType.MouseButton1 then dragHue = true end
+                    end)
+                    UserInputService.InputEnded:Connect(function(i)
+                        if i.UserInputType == Enum.UserInputType.MouseButton1 then
+                            dragSV, dragHue = false, false
+                        end
+                    end)
+                    RunService.RenderStepped:Connect(function()
+                        if not Pop.Parent then return end
+                        local m = UserInputService:GetMouseLocation()
+                        if dragSV then
+                            s = math.clamp((m.X - SV.AbsolutePosition.X) / SV.AbsoluteSize.X, 0, 1)
+                            v = 1 - math.clamp((m.Y - 36 - SV.AbsolutePosition.Y) / SV.AbsoluteSize.Y, 0, 1)
+                            SVCursor.Position = UDim2.new(s, -1, 1 - v, -1)
+                            fire()
+                        elseif dragHue then
+                            h = math.clamp((m.X - Hue.AbsolutePosition.X) / Hue.AbsoluteSize.X, 0, 1)
+                            HueCursor.Position = UDim2.new(h, -1, 0, 0)
+                            SV.BackgroundColor3 = Color3.fromHSV(h, 1, 1)
+                            fire()
+                        end
+                    end)
+
+                    currentPopup = Pop
+                end)
+
+                local api = {}
+                function api:Get() return Color3.fromHSV(h, s, v) end
+                function api:Set(c) h, s, v = c:ToHSV() fire() end
+                return api
+            end
+
+            -- ---------- keybind ----------
+            function Section:AddKeybind(text, defaultKey, cb)
+                local key, listening = defaultKey, false
+                local Row = Create("Frame", {
+                    Size = UDim2.new(1, 0, 0, 15), BackgroundTransparency = 1,
+                }, Holder)
+                Label(Row, text, { Size = UDim2.new(1, -60, 1, 0) })
+                local BtnOut = Create("Frame", {
+                    Size = UDim2.new(0, 54, 0, 15), Position = UDim2.new(1, -54, 0, 0),
+                    BackgroundColor3 = Colors.OuterBorder, BorderSizePixel = 0,
+                }, Row)
+                local Btn = Create("TextButton", {
+                    Size = UDim2.new(1, -2, 1, -2), Position = UDim2.new(0, 1, 0, 1),
+                    BackgroundColor3 = Colors.Element, BorderSizePixel = 0,
+                    Text = key and key.Name or "none", AutoButtonColor = false,
+                    TextColor3 = Colors.TextDark, TextSize = 10, Font = FONT,
+                }, BtnOut)
+                Btn.MouseEnter:Connect(function() Tween(Btn, { BackgroundColor3 = Colors.ElementHover }) end)
+                Btn.MouseLeave:Connect(function() Tween(Btn, { BackgroundColor3 = Colors.Element }) end)
+                Btn.MouseButton1Click:Connect(function()
+                    listening = true
+                    Btn.Text = "..."
+                    Tween(Btn, { TextColor3 = Colors.Accent })
+                end)
+                UserInputService.InputBegan:Connect(function(input, gpe)
+                    if listening and input.UserInputType == Enum.UserInputType.Keyboard then
+                        key = input.KeyCode ~= Enum.KeyCode.Escape and input.KeyCode or nil
+                        Btn.Text = key and key.Name or "none"
+                        Tween(Btn, { TextColor3 = Colors.TextDark })
+                        listening = false
+                    elseif not gpe and key and input.KeyCode == key then
+                        if cb then cb(key) end
                     end
                 end)
             end
 
-            function Section:CreateDropdown(text, opts, cb)
-                local Frame = Instance.new("Frame", SectionInner)
-                Frame.Size = UDim2.new(1, 0, 0, 35)
-                Frame.BackgroundTransparency = 1
-                local Lbl = Instance.new("TextLabel", Frame)
-                Lbl.Size = UDim2.new(1, 0, 0, 14)
-                Lbl.BackgroundTransparency = 1
-                Lbl.Text = text
-                Lbl.TextColor3 = Colors.Text
-                Lbl.TextSize = 11
-                Lbl.Font = Enum.Font.Code
-                Lbl.TextXAlignment = Enum.TextXAlignment.Left
-                
-                local DropOut = Instance.new("Frame", Frame)
-                DropOut.Size = UDim2.new(1, 0, 0, 20)
-                DropOut.Position = UDim2.new(0, 0, 0, 15)
-                DropOut.BackgroundColor3 = Colors.OuterBorder
-                local MainBtn = Instance.new("TextButton", DropOut)
-                MainBtn.Size = UDim2.new(1, -2, 1, -2)
-                MainBtn.Position = UDim2.new(0, 1, 0, 1)
-                MainBtn.BackgroundColor3 = Colors.InnerBackground
-                MainBtn.Text = "  " .. tostring(opts[1])
-                MainBtn.TextColor3 = Colors.Text
-                MainBtn.TextSize = 11
-                MainBtn.Font = Enum.Font.Code
-                MainBtn.TextXAlignment = Enum.TextXAlignment.Left
-                
-                local ListOut = Instance.new("Frame", DropOut)
-                ListOut.Size = UDim2.new(1, 0, 0, #opts * 20 + 2)
-                ListOut.Position = UDim2.new(0, 0, 1, 1)
-                ListOut.BackgroundColor3 = Colors.OuterBorder
-                ListOut.Visible = false
-                ListOut.ZIndex = 5
-                local ListIn = Instance.new("Frame", ListOut)
-                ListIn.Size = UDim2.new(1, -2, 1, -2)
-                ListIn.Position = UDim2.new(0, 1, 0, 1)
-                ListIn.BackgroundColor3 = Colors.InnerBackground
-                ListIn.ZIndex = 5
-                Instance.new("UIListLayout", ListIn)
-                
-                MainBtn.MouseButton1Click:Connect(function() ListOut.Visible = not ListOut.Visible end)
-                for _, opt in pairs(opts) do
-                    local OptBtn = Instance.new("TextButton", ListIn)
-                    OptBtn.Size = UDim2.new(1, 0, 0, 20)
-                    OptBtn.BackgroundTransparency = 1
-                    OptBtn.Text = "  " .. opt
-                    OptBtn.TextColor3 = Colors.TextDark
-                    OptBtn.TextSize = 11
-                    OptBtn.Font = Enum.Font.Code
-                    OptBtn.TextXAlignment = Enum.TextXAlignment.Left
-                    OptBtn.ZIndex = 6
-                    OptBtn.MouseButton1Click:Connect(function()
-                        MainBtn.Text = "  " .. opt
-                        ListOut.Visible = false
-                        if cb then cb(opt) end
-                    end)
-                end
-            end
-
-            -- НАСТОЯЩИЙ ВЫПАДАЮЩИЙ COLORPICKER
-            function Section:CreateColorPicker(text, defaultColor, cb)
-                local Frame = Instance.new("Frame", SectionInner)
-                Frame.Size = UDim2.new(1, 0, 0, 20)
-                Frame.BackgroundTransparency = 1
-                Frame.ClipsDescendants = true -- Скрываем выпадающее меню, пока оно закрыто
-                
-                local TopBar = Instance.new("Frame", Frame)
-                TopBar.Size = UDim2.new(1, 0, 0, 20)
-                TopBar.BackgroundTransparency = 1
-                
-                local Lbl = Instance.new("TextLabel", TopBar)
-                Lbl.Size = UDim2.new(1, -30, 1, 0)
-                Lbl.BackgroundTransparency = 1
-                Lbl.Text = text
-                Lbl.TextColor3 = Colors.Text
-                Lbl.TextSize = 11
-                Lbl.Font = Enum.Font.Code
-                Lbl.TextXAlignment = Enum.TextXAlignment.Left
-                
-                local ColorBtnOut = Instance.new("Frame", TopBar)
-                ColorBtnOut.Size = UDim2.new(0, 30, 0, 14)
-                ColorBtnOut.Position = UDim2.new(1, -30, 0, 3)
-                ColorBtnOut.BackgroundColor3 = Colors.OuterBorder
-                local ColorBtn = Instance.new("TextButton", ColorBtnOut)
-                ColorBtn.Size = UDim2.new(1, -2, 1, -2)
-                ColorBtn.Position = UDim2.new(0, 1, 0, 1)
-                ColorBtn.BackgroundColor3 = defaultColor
-                ColorBtn.Text = ""
-                
-                -- Выпадающая часть с ползунками
-                local DropMenu = Instance.new("Frame", Frame)
-                DropMenu.Size = UDim2.new(1, 0, 0, 95)
-                DropMenu.Position = UDim2.new(0, 0, 0, 20)
-                DropMenu.BackgroundTransparency = 1
-                local DropLayout = Instance.new("UIListLayout", DropMenu)
-                DropLayout.Padding = UDim.new(0, 2)
-                
-                local isOpen = false
-                ColorBtn.MouseButton1Click:Connect(function()
-                    isOpen = not isOpen
-                    Frame.Size = isOpen and UDim2.new(1, 0, 0, 115) or UDim2.new(1, 0, 0, 20)
+            -- ---------- button ----------
+            function Section:AddButton(text, cb)
+                local Out = Create("Frame", {
+                    Size = UDim2.new(1, 0, 0, 20), BackgroundColor3 = Colors.OuterBorder,
+                    BorderSizePixel = 0,
+                }, Holder)
+                local Btn = Create("TextButton", {
+                    Size = UDim2.new(1, -2, 1, -2), Position = UDim2.new(0, 1, 0, 1),
+                    BackgroundColor3 = Colors.Element, BorderSizePixel = 0,
+                    Text = text, TextColor3 = Colors.Text, TextSize = TEXTSIZE,
+                    Font = FONT, AutoButtonColor = false,
+                }, Out)
+                Create("UIGradient", {
+                    Rotation = 90,
+                    Color = ColorSequence.new(Color3.fromRGB(255, 255, 255), Color3.fromRGB(180, 180, 180)),
+                }, Btn)
+                Btn.MouseEnter:Connect(function() Tween(Btn, { BackgroundColor3 = Colors.ElementHover }) end)
+                Btn.MouseLeave:Connect(function() Tween(Btn, { BackgroundColor3 = Colors.Element }) end)
+                Btn.MouseButton1Down:Connect(function()
+                    Tween(Btn, { BackgroundColor3 = Colors.Background })
                 end)
-                
-                local r, g, b = math.floor(defaultColor.R*255), math.floor(defaultColor.G*255), math.floor(defaultColor.B*255)
-                
-                local function updateCol()
-                    local c = Color3.fromRGB(r, g, b)
-                    ColorBtn.BackgroundColor3 = c
-                    if cb then cb(c) end
-                end
-
-                -- Мини-слайдер для пикера
-                local function createMiniSlider(lblText, defVal, callback)
-                    local SFrame = Instance.new("Frame", DropMenu)
-                    SFrame.Size = UDim2.new(1, 0, 0, 28)
-                    SFrame.BackgroundTransparency = 1
-                    local SLbl = Instance.new("TextLabel", SFrame)
-                    SLbl.Size = UDim2.new(1, 0, 0, 12)
-                    SLbl.BackgroundTransparency = 1
-                    SLbl.Text = lblText .. " : " .. defVal
-                    SLbl.TextColor3 = Colors.TextDark
-                    SLbl.TextSize = 10
-                    SLbl.Font = Enum.Font.Code
-                    SLbl.TextXAlignment = Enum.TextXAlignment.Left
-                    
-                    local SOut = Instance.new("Frame", SFrame)
-                    SOut.Size = UDim2.new(1, 0, 0, 10)
-                    SOut.Position = UDim2.new(0, 0, 0, 14)
-                    SOut.BackgroundColor3 = Colors.OuterBorder
-                    local SIn = Instance.new("TextButton", SOut)
-                    SIn.Size = UDim2.new(1, -2, 1, -2)
-                    SIn.Position = UDim2.new(0, 1, 0, 1)
-                    SIn.BackgroundColor3 = Colors.InnerBackground
-                    SIn.Text = ""
-                    local SFill = Instance.new("Frame", SIn)
-                    SFill.Size = UDim2.new(defVal/255, 0, 1, 0)
-                    SFill.BackgroundColor3 = Colors.Accent
-                    SFill.BorderSizePixel = 0
-                    
-                    local sDrag = false
-                    SIn.InputBegan:Connect(function(i) if i.UserInputType == Enum.UserInputType.MouseButton1 then sDrag = true end end)
-                    UserInputService.InputEnded:Connect(function(i) if i.UserInputType == Enum.UserInputType.MouseButton1 then sDrag = false end end)
-                    UserInputService.InputChanged:Connect(function(i)
-                        if sDrag and i.UserInputType == Enum.UserInputType.MouseMovement then
-                            local pct = math.clamp((i.Position.X - SIn.AbsolutePosition.X) / SIn.AbsoluteSize.X, 0, 1)
-                            local val = math.floor(pct * 255)
-                            SFill.Size = UDim2.new(pct, 0, 1, 0)
-                            SLbl.Text = lblText .. " : " .. val
-                            callback(val)
-                        end
-                    end)
-                end
-
-                createMiniSlider("Red", r, function(v) r = v updateCol() end)
-                createMiniSlider("Green", g, function(v) g = v updateCol() end)
-                createMiniSlider("Blue", b, function(v) b = v updateCol() end)
+                Btn.MouseButton1Click:Connect(function()
+                    Tween(Btn, { BackgroundColor3 = Colors.ElementHover })
+                    if cb then cb() end
+                end)
             end
 
-            function Section:CreateButton(text, cb)
-                local Out = Instance.new("Frame", SectionInner)
-                Out.Size = UDim2.new(1, 0, 0, 20)
-                Out.BackgroundColor3 = Colors.OuterBorder
-                local Btn = Instance.new("TextButton", Out)
-                Btn.Size = UDim2.new(1, -2, 1, -2)
-                Btn.Position = UDim2.new(0, 1, 0, 1)
-                Btn.BackgroundColor3 = Colors.InnerBackground
-                Btn.Text = text
-                Btn.TextColor3 = Colors.Text
-                Btn.TextSize = 11
-                Btn.Font = Enum.Font.Code
-                Btn.MouseButton1Click:Connect(function() if cb then cb() end end)
+            -- ---------- textbox ----------
+            function Section:AddTextbox(text, placeholder, cb)
+                local Frame = Create("Frame", {
+                    Size = UDim2.new(1, 0, 0, 34), BackgroundTransparency = 1,
+                }, Holder)
+                Label(Frame, text, { Size = UDim2.new(1, 0, 0, 13) })
+                local Out = Create("Frame", {
+                    Size = UDim2.new(1, 0, 0, 18), Position = UDim2.new(0, 0, 0, 16),
+                    BackgroundColor3 = Colors.OuterBorder, BorderSizePixel = 0,
+                }, Frame)
+                local Box = Create("TextBox", {
+                    Size = UDim2.new(1, -2, 1, -2), Position = UDim2.new(0, 1, 0, 1),
+                    BackgroundColor3 = Colors.Element, BorderSizePixel = 0,
+                    Text = "", PlaceholderText = placeholder or "...",
+                    PlaceholderColor3 = Colors.TextDark, TextColor3 = Colors.Text,
+                    TextSize = TEXTSIZE, Font = FONT, ClearTextOnFocus = false,
+                    TextXAlignment = Enum.TextXAlignment.Left,
+                }, Out)
+                Create("UIPadding", { PaddingLeft = UDim.new(0, 6) }, Box)
+                Box.Focused:Connect(function() Tween(Out, { BackgroundColor3 = Colors.Accent }) end)
+                Box.FocusLost:Connect(function()
+                    Tween(Out, { BackgroundColor3 = Colors.OuterBorder })
+                    SkeetUI.flags[text] = Box.Text
+                    if cb then cb(Box.Text) end
+                end)
             end
+
+            -- ---------- label ----------
+            function Section:AddLabel(text)
+                local l = Label(Holder, text, {
+                    Size = UDim2.new(1, 0, 0, 13), TextColor3 = Colors.TextDark,
+                })
+                local api = {}
+                function api:Set(t) l.Text = t end
+                return api
+            end
+
             return Section
         end
         return Tab
     end
     return Window
 end
+
 return SkeetUI
