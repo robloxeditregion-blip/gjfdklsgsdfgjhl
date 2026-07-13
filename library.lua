@@ -1,16 +1,18 @@
 --[[
-    SkeetUI v2 — gamesense/skeet style UI library for Roblox
+    SkeetUI v2.1 — gamesense/skeet style UI library for Roblox
     Элементы: Checkbox (+keybind ПКМ), Slider, Dropdown, MultiDropdown,
     ColorPicker (SV + Hue), Keybind, Button, Textbox, Label
-    Анимации: TweenService (hover, fill, open/close, fade)
+    Конфиги: SkeetUI:SaveConfig(name) / :LoadConfig(name) / :GetConfigs() / :DeleteConfig(name)
     Открытие/закрытие меню: RightShift
 ]]
 
-local SkeetUI = { flags = {} }
+local SkeetUI = { flags = {}, items = {} }
 
 local TweenService     = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
 local RunService       = game:GetService("RunService")
+local HttpService      = game:GetService("HttpService")
+local GuiService       = game:GetService("GuiService")
 local CoreGui          = game:GetService("CoreGui")
 
 if CoreGui:FindFirstChild("SkeetUI") then CoreGui.SkeetUI:Destroy() end
@@ -26,12 +28,12 @@ local Colors = {
     Text            = Color3.fromRGB(205, 205, 205),
     TextDark        = Color3.fromRGB(110, 110, 110),
     TextActive      = Color3.fromRGB(255, 255, 255),
-    Accent          = Color3.fromRGB(149, 184, 66), -- фирменный skeet-зелёный
+    Accent          = Color3.fromRGB(149, 184, 66),
 }
 
 local FONT, TEXTSIZE = Enum.Font.Code, 12
-local TWEEN_FAST  = TweenInfo.new(0.10, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-local TWEEN_MED   = TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+local TWEEN_FAST = TweenInfo.new(0.10, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+local TWEEN_MED  = TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 
 -- ============ helpers ============
 local function Create(class, props, parent)
@@ -47,7 +49,6 @@ local function Tween(obj, props, info)
     return t
 end
 
--- классическая skeet-рамка: чёрный -> серый -> чёрный -> контент
 local function TripleBorder(parent, size, pos)
     local outer = Create("Frame", {
         Size = size, Position = pos,
@@ -78,6 +79,64 @@ local function Label(parent, text, props)
     return l
 end
 
+-- ============ config system ============
+local CONFIG_FOLDER = "skeetui/configs"
+local canSave = (typeof(writefile) == "function") and (typeof(readfile) == "function")
+    and (typeof(isfile) == "function") and (typeof(makefolder) == "function")
+    and (typeof(isfolder) == "function")
+
+local function ensureFolder()
+    if not canSave then return false end
+    if not isfolder("skeetui") then makefolder("skeetui") end
+    if not isfolder(CONFIG_FOLDER) then makefolder(CONFIG_FOLDER) end
+    return true
+end
+
+function SkeetUI:SaveConfig(name)
+    if not ensureFolder() then warn("[SkeetUI] нет доступа к файлам (writefile)") return false end
+    name = (name and name ~= "") and name or "default"
+    local data = {}
+    for flag, item in pairs(self.items) do
+        data[flag] = { type = item.type, value = item.Save() }
+    end
+    writefile(CONFIG_FOLDER .. "/" .. name .. ".json", HttpService:JSONEncode(data))
+    return true
+end
+
+function SkeetUI:LoadConfig(name)
+    if not canSave then warn("[SkeetUI] нет доступа к файлам (readfile)") return false end
+    name = (name and name ~= "") and name or "default"
+    local path = CONFIG_FOLDER .. "/" .. name .. ".json"
+    if not isfile(path) then warn("[SkeetUI] конфиг не найден: " .. name) return false end
+    local ok, data = pcall(function() return HttpService:JSONDecode(readfile(path)) end)
+    if not ok then warn("[SkeetUI] битый конфиг: " .. name) return false end
+    for flag, saved in pairs(data) do
+        local item = self.items[flag]
+        if item and item.type == saved.type then
+            pcall(item.Load, saved.value)
+        end
+    end
+    return true
+end
+
+function SkeetUI:GetConfigs()
+    local out = {}
+    if not (canSave and typeof(listfiles) == "function" and isfolder(CONFIG_FOLDER)) then return out end
+    for _, f in ipairs(listfiles(CONFIG_FOLDER)) do
+        local n = f:match("([^/\\]+)%.json$")
+        if n then table.insert(out, n) end
+    end
+    table.sort(out)
+    return out
+end
+
+function SkeetUI:DeleteConfig(name)
+    if not (canSave and typeof(delfile) == "function") then return false end
+    local path = CONFIG_FOLDER .. "/" .. name .. ".json"
+    if isfile(path) then delfile(path) return true end
+    return false
+end
+
 -- ============ window ============
 function SkeetUI:CreateWindow(titleText)
     local Window = { Tabs = {}, CurrentTab = nil, Open = true }
@@ -87,7 +146,6 @@ function SkeetUI:CreateWindow(titleText)
         ZIndexBehavior = Enum.ZIndexBehavior.Global,
     }, CoreGui)
 
-    -- слой для выпадающих списков/пикеров поверх всего
     local Overlay = Create("Frame", {
         Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, ZIndex = 100,
     }, ScreenGui)
@@ -95,13 +153,12 @@ function SkeetUI:CreateWindow(titleText)
     local Root, Main = TripleBorder(ScreenGui,
         UDim2.new(0, 560, 0, 480), UDim2.new(0.5, -280, 0.5, -240))
 
-    -- лёгкий вертикальный градиент фона как у skeet
     Create("UIGradient", {
         Rotation = 90,
         Color = ColorSequence.new(Color3.fromRGB(25, 25, 25), Color3.fromRGB(12, 12, 12)),
     }, Main)
 
-    -- фирменная градиентная полоса сверху
+    -- градиентная полоса сверху
     local TopLine = Create("Frame", {
         Size = UDim2.new(1, 0, 0, 2), BackgroundColor3 = Color3.new(1, 1, 1),
         BorderSizePixel = 0, ZIndex = 2,
@@ -115,7 +172,6 @@ function SkeetUI:CreateWindow(titleText)
             ColorSequenceKeypoint.new(1.00, Color3.fromRGB(59, 175, 222)),
         }),
     }, TopLine)
-    -- анимация переливания градиента
     task.spawn(function()
         local g = TopLine:FindFirstChildOfClass("UIGradient")
         while TopLine.Parent do
@@ -124,7 +180,7 @@ function SkeetUI:CreateWindow(titleText)
         end
     end)
 
-    -- drag за верхнюю зону
+    -- drag за шапку
     do
         local dragging, dragStart, startPos
         Main.InputBegan:Connect(function(input)
@@ -150,16 +206,16 @@ function SkeetUI:CreateWindow(titleText)
         TextColor3 = Colors.TextActive, ZIndex = 2,
     })
 
-    -- вертикальная колонка табов слева (как у gamesense)
+    -- таб-колонка (разделитель теперь в Main — фикс съехавших кнопок)
     local TabColumn = Create("Frame", {
         Size = UDim2.new(0, 76, 1, -34), Position = UDim2.new(0, 0, 0, 30),
         BackgroundColor3 = Color3.fromRGB(12, 12, 12), BorderSizePixel = 0,
     }, Main)
-    Create("Frame", { -- разделитель
-        Size = UDim2.new(0, 1, 1, 0), Position = UDim2.new(1, 0, 0, 0),
+    Create("Frame", {
+        Size = UDim2.new(0, 1, 1, -32), Position = UDim2.new(0, 76, 0, 30),
         BackgroundColor3 = Colors.MidBorder, BorderSizePixel = 0,
-    }, TabColumn)
-    local TabLayout = Create("UIListLayout", {
+    }, Main)
+    Create("UIListLayout", {
         Padding = UDim.new(0, 0), SortOrder = Enum.SortOrder.LayoutOrder,
     }, TabColumn)
     Create("UIPadding", { PaddingTop = UDim.new(0, 10) }, TabColumn)
@@ -169,7 +225,7 @@ function SkeetUI:CreateWindow(titleText)
         BackgroundTransparency = 1,
     }, Main)
 
-    -- открытие/закрытие меню
+    -- открытие/закрытие
     UserInputService.InputBegan:Connect(function(input, gpe)
         if gpe then return end
         if input.KeyCode == Enum.KeyCode.RightShift then
@@ -182,12 +238,11 @@ function SkeetUI:CreateWindow(titleText)
                 Tween(Root, { Size = UDim2.new(0, 560, 0, 0) }, TWEEN_MED)
                     .Completed:Wait()
                 Root.Visible = false
-                Overlay.Visible = false
             end
         end
     end)
 
-    -- ============ dropdown overlay manager ============
+    -- ============ popup manager ============
     local currentPopup
     local function ClosePopup()
         if currentPopup then currentPopup:Destroy() currentPopup = nil end
@@ -195,8 +250,8 @@ function SkeetUI:CreateWindow(titleText)
     UserInputService.InputBegan:Connect(function(i)
         if i.UserInputType == Enum.UserInputType.MouseButton1 and currentPopup then
             local p, s = currentPopup.AbsolutePosition, currentPopup.AbsoluteSize
-            local m = UserInputService:GetMouseLocation()
-            if m.X < p.X or m.X > p.X + s.X or m.Y < p.Y or m.Y > p.Y + s.Y - 36 then
+            local m = UserInputService:GetMouseLocation() - GuiService:GetGuiInset()
+            if m.X < p.X or m.X > p.X + s.X or m.Y < p.Y or m.Y > p.Y + s.Y then
                 task.wait() ClosePopup()
             end
         end
@@ -212,6 +267,7 @@ function SkeetUI:CreateWindow(titleText)
             TextColor3 = Colors.TextDark, TextSize = TEXTSIZE, Font = FONT,
         }, TabColumn)
         local ActiveBar = Create("Frame", {
+            Name = "ActiveBar",
             Size = UDim2.new(0, 2, 1, 0), BackgroundColor3 = Colors.Accent,
             BorderSizePixel = 0, BackgroundTransparency = 1,
         }, TabBtn)
@@ -220,7 +276,6 @@ function SkeetUI:CreateWindow(titleText)
             Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, Visible = false,
         }, ContentArea)
 
-        -- две колонки groupbox'ов
         local columns = {}
         for i = 1, 2 do
             local col = Create("ScrollingFrame", {
@@ -243,7 +298,8 @@ function SkeetUI:CreateWindow(titleText)
                 if b:IsA("TextButton") then
                     Tween(b, { TextColor3 = Colors.TextDark,
                                BackgroundColor3 = Color3.fromRGB(12, 12, 12) })
-                    Tween(b:FindFirstChild("Frame"), { BackgroundTransparency = 1 })
+                    local bar = b:FindFirstChild("ActiveBar")
+                    if bar then Tween(bar, { BackgroundTransparency = 1 }) end
                 end
             end
             TabPage.Visible = true
@@ -255,20 +311,16 @@ function SkeetUI:CreateWindow(titleText)
         end
 
         TabBtn.MouseEnter:Connect(function()
-            if Window.CurrentTab ~= TabPage then
-                Tween(TabBtn, { TextColor3 = Colors.Text })
-            end
+            if Window.CurrentTab ~= TabPage then Tween(TabBtn, { TextColor3 = Colors.Text }) end
         end)
         TabBtn.MouseLeave:Connect(function()
-            if Window.CurrentTab ~= TabPage then
-                Tween(TabBtn, { TextColor3 = Colors.TextDark })
-            end
+            if Window.CurrentTab ~= TabPage then Tween(TabBtn, { TextColor3 = Colors.TextDark }) end
         end)
         TabBtn.MouseButton1Click:Connect(Select)
         if not Window.CurrentTab then Select() end
 
-        -- ============ groupbox / section ============
-        function Tab:CreateSection(sectionName, side) -- side: 1 = левая, 2 = правая
+        -- ============ groupbox ============
+        function Tab:CreateSection(sectionName, side)
             local Section = {}
             local parentCol = columns[side == 2 and 2 or 1]
 
@@ -299,7 +351,7 @@ function SkeetUI:CreateWindow(titleText)
                 Outer.Size = UDim2.new(1, -6, 0, Layout.AbsoluteContentSize.Y + 30)
             end)
 
-            -- ---------- checkbox (с кейбиндом по ПКМ) ----------
+            -- ---------- checkbox ----------
             function Section:AddCheckbox(text, default, cb)
                 local state = default or false
                 local bindKey, bindListening = nil, false
@@ -342,11 +394,7 @@ function SkeetUI:CreateWindow(titleText)
                 Row.MouseLeave:Connect(function()
                     if not state then Tween(BoxIn, { BackgroundColor3 = Colors.Element }) end
                 end)
-                Row.MouseButton1Click:Connect(function()
-                    state = not state
-                    apply(true)
-                end)
-                -- ПКМ — назначить бинд
+                Row.MouseButton1Click:Connect(function() state = not state apply(true) end)
                 Row.MouseButton2Click:Connect(function()
                     bindListening = true
                     BindLbl.Text = "[...]"
@@ -357,8 +405,7 @@ function SkeetUI:CreateWindow(titleText)
                         BindLbl.Text = bindKey and ("[" .. bindKey.Name .. "]") or ""
                         bindListening = false
                     elseif not gpe and bindKey and input.KeyCode == bindKey then
-                        state = not state
-                        apply(true)
+                        state = not state apply(true)
                     end
                 end)
                 apply(false)
@@ -366,6 +413,23 @@ function SkeetUI:CreateWindow(titleText)
                 local api = {}
                 function api:Set(v) state = v apply(true) end
                 function api:Get() return state end
+
+                SkeetUI.items[text] = {
+                    type = "checkbox",
+                    Save = function()
+                        return { value = state, bind = bindKey and bindKey.Name or nil }
+                    end,
+                    Load = function(data)
+                        state = data.value and true or false
+                        if data.bind and Enum.KeyCode[data.bind] then
+                            bindKey = Enum.KeyCode[data.bind]
+                            BindLbl.Text = "[" .. data.bind .. "]"
+                        else
+                            bindKey = nil BindLbl.Text = ""
+                        end
+                        apply(true)
+                    end,
+                }
                 return api
             end
 
@@ -378,7 +442,7 @@ function SkeetUI:CreateWindow(titleText)
                 local Frame = Create("Frame", {
                     Size = UDim2.new(1, 0, 0, 28), BackgroundTransparency = 1,
                 }, Holder)
-                local Lbl = Label(Frame, text, { Size = UDim2.new(1, 0, 0, 13) })
+                Label(Frame, text, { Size = UDim2.new(1, 0, 0, 13) })
                 local BarOut = Create("Frame", {
                     Size = UDim2.new(1, 0, 0, 9), Position = UDim2.new(0, 0, 0, 17),
                     BackgroundColor3 = Colors.OuterBorder, BorderSizePixel = 0,
@@ -403,20 +467,22 @@ function SkeetUI:CreateWindow(titleText)
                 }, BarOut)
 
                 local dragging = false
-                local function update(x, fire)
-                    local pct = math.clamp((x - BarIn.AbsolutePosition.X) / BarIn.AbsoluteSize.X, 0, 1)
-                    val = math.floor((min + (max - min) * pct) + 0.5)
-                    pct = (val - min) / (max - min)
+                local function setVal(v, fire)
+                    val = math.clamp(math.floor(v + 0.5), min, max)
+                    local pct = (val - min) / (max - min)
                     Tween(Fill, { Size = UDim2.new(pct, 0, 1, 0) })
                     ValLbl.Text = tostring(val) .. suffix
                     SkeetUI.flags[text] = val
                     if fire and cb then cb(val) end
                 end
+                local function updateFromX(x, fire)
+                    local pct = math.clamp((x - BarIn.AbsolutePosition.X) / BarIn.AbsoluteSize.X, 0, 1)
+                    setVal(min + (max - min) * pct, fire)
+                end
 
                 BarOut.InputBegan:Connect(function(i)
                     if i.UserInputType == Enum.UserInputType.MouseButton1 then
-                        dragging = true
-                        update(i.Position.X, true)
+                        dragging = true updateFromX(i.Position.X, true)
                     end
                 end)
                 UserInputService.InputEnded:Connect(function(i)
@@ -424,22 +490,23 @@ function SkeetUI:CreateWindow(titleText)
                 end)
                 UserInputService.InputChanged:Connect(function(i)
                     if dragging and i.UserInputType == Enum.UserInputType.MouseMovement then
-                        update(i.Position.X, true)
+                        updateFromX(i.Position.X, true)
                     end
                 end)
 
                 local api = {}
-                function api:Set(v)
-                    val = math.clamp(v, min, max)
-                    Tween(Fill, { Size = UDim2.new((val - min) / (max - min), 0, 1, 0) })
-                    ValLbl.Text = tostring(val) .. suffix
-                    if cb then cb(val) end
-                end
+                function api:Set(v) setVal(v, true) end
                 function api:Get() return val end
+
+                SkeetUI.items[text] = {
+                    type = "slider",
+                    Save = function() return val end,
+                    Load = function(v) setVal(tonumber(v) or min, true) end,
+                }
                 return api
             end
 
-            -- ---------- dropdown (общая база для single/multi) ----------
+            -- ---------- dropdown base ----------
             local function BaseDropdown(text, opts, multi, default, cb)
                 local selected = multi and (default or {}) or (default or opts[1])
 
@@ -544,7 +611,27 @@ function SkeetUI:CreateWindow(titleText)
 
                 local api = {}
                 function api:Get() return selected end
-                function api:Set(v) selected = v refreshText() if cb then cb(v) end end
+                function api:Set(v)
+                    selected = v refreshText()
+                    SkeetUI.flags[text] = selected
+                    if cb then cb(v) end
+                end
+
+                SkeetUI.items[text] = {
+                    type = multi and "multidropdown" or "dropdown",
+                    Save = function() return selected end,
+                    Load = function(v)
+                        if multi then
+                            selected = {}
+                            for k, on in pairs(v or {}) do if on then selected[k] = true end end
+                        else
+                            selected = v
+                        end
+                        refreshText()
+                        SkeetUI.flags[text] = selected
+                        if cb then cb(selected) end
+                    end,
+                }
                 return api
             end
 
@@ -555,7 +642,7 @@ function SkeetUI:CreateWindow(titleText)
                 return BaseDropdown(text, opts, true, default, cb)
             end
 
-            -- ---------- color picker (SV-квадрат + hue) ----------
+            -- ---------- color picker ----------
             function Section:AddColorPicker(text, defaultColor, cb)
                 local h, s, v = (defaultColor or Colors.Accent):ToHSV()
 
@@ -601,7 +688,6 @@ function SkeetUI:CreateWindow(titleText)
                         BackgroundColor3 = Colors.Background, BorderSizePixel = 0, ZIndex = 100,
                     }, Pop)
 
-                    -- SV square
                     local SV = Create("TextButton", {
                         Size = UDim2.new(1, -12, 0, 100), Position = UDim2.new(0, 6, 0, 6),
                         BackgroundColor3 = Color3.fromHSV(h, 1, 1), BorderSizePixel = 0,
@@ -611,23 +697,18 @@ function SkeetUI:CreateWindow(titleText)
                         Size = UDim2.new(1, 0, 1, 0), BorderSizePixel = 0,
                         BackgroundColor3 = Color3.new(1, 1, 1), ZIndex = 102,
                     }, SV)
-                    Create("UIGradient", {
-                        Transparency = NumberSequence.new(0, 1),
-                    }, WhiteOv)
+                    Create("UIGradient", { Transparency = NumberSequence.new(0, 1) }, WhiteOv)
                     local BlackOv = Create("Frame", {
                         Size = UDim2.new(1, 0, 1, 0), BorderSizePixel = 0,
                         BackgroundColor3 = Color3.new(0, 0, 0), ZIndex = 103,
                     }, SV)
-                    Create("UIGradient", {
-                        Rotation = 90, Transparency = NumberSequence.new(1, 0),
-                    }, BlackOv)
+                    Create("UIGradient", { Rotation = 90, Transparency = NumberSequence.new(1, 0) }, BlackOv)
                     local SVCursor = Create("Frame", {
                         Size = UDim2.new(0, 3, 0, 3), BorderSizePixel = 1,
                         BorderColor3 = Color3.new(1, 1, 1), BackgroundTransparency = 1,
                         Position = UDim2.new(s, -1, 1 - v, -1), ZIndex = 104,
                     }, SV)
 
-                    -- hue bar
                     local Hue = Create("TextButton", {
                         Size = UDim2.new(1, -12, 0, 12), Position = UDim2.new(0, 6, 0, 112),
                         BorderSizePixel = 0, Text = "", AutoButtonColor = false, ZIndex = 101,
@@ -657,10 +738,10 @@ function SkeetUI:CreateWindow(titleText)
                     end)
                     RunService.RenderStepped:Connect(function()
                         if not Pop.Parent then return end
-                        local m = UserInputService:GetMouseLocation()
+                        local m = UserInputService:GetMouseLocation() - GuiService:GetGuiInset()
                         if dragSV then
                             s = math.clamp((m.X - SV.AbsolutePosition.X) / SV.AbsoluteSize.X, 0, 1)
-                            v = 1 - math.clamp((m.Y - 36 - SV.AbsolutePosition.Y) / SV.AbsoluteSize.Y, 0, 1)
+                            v = 1 - math.clamp((m.Y - SV.AbsolutePosition.Y) / SV.AbsoluteSize.Y, 0, 1)
                             SVCursor.Position = UDim2.new(s, -1, 1 - v, -1)
                             fire()
                         elseif dragHue then
@@ -677,6 +758,18 @@ function SkeetUI:CreateWindow(titleText)
                 local api = {}
                 function api:Get() return Color3.fromHSV(h, s, v) end
                 function api:Set(c) h, s, v = c:ToHSV() fire() end
+
+                SkeetUI.items[text] = {
+                    type = "colorpicker",
+                    Save = function()
+                        local c = Color3.fromHSV(h, s, v)
+                        return { math.floor(c.R * 255 + 0.5), math.floor(c.G * 255 + 0.5), math.floor(c.B * 255 + 0.5) }
+                    end,
+                    Load = function(t)
+                        h, s, v = Color3.fromRGB(t[1] or 255, t[2] or 255, t[3] or 255):ToHSV()
+                        fire()
+                    end,
+                }
                 return api
             end
 
@@ -714,6 +807,15 @@ function SkeetUI:CreateWindow(titleText)
                         if cb then cb(key) end
                     end
                 end)
+
+                SkeetUI.items[text] = {
+                    type = "keybind",
+                    Save = function() return key and key.Name or nil end,
+                    Load = function(name)
+                        key = (name and Enum.KeyCode[name]) or nil
+                        Btn.Text = key and key.Name or "none"
+                    end,
+                }
             end
 
             -- ---------- button ----------
@@ -734,9 +836,7 @@ function SkeetUI:CreateWindow(titleText)
                 }, Btn)
                 Btn.MouseEnter:Connect(function() Tween(Btn, { BackgroundColor3 = Colors.ElementHover }) end)
                 Btn.MouseLeave:Connect(function() Tween(Btn, { BackgroundColor3 = Colors.Element }) end)
-                Btn.MouseButton1Down:Connect(function()
-                    Tween(Btn, { BackgroundColor3 = Colors.Background })
-                end)
+                Btn.MouseButton1Down:Connect(function() Tween(Btn, { BackgroundColor3 = Colors.Background }) end)
                 Btn.MouseButton1Click:Connect(function()
                     Tween(Btn, { BackgroundColor3 = Colors.ElementHover })
                     if cb then cb() end
@@ -768,6 +868,21 @@ function SkeetUI:CreateWindow(titleText)
                     SkeetUI.flags[text] = Box.Text
                     if cb then cb(Box.Text) end
                 end)
+
+                SkeetUI.items[text] = {
+                    type = "textbox",
+                    Save = function() return Box.Text end,
+                    Load = function(v)
+                        Box.Text = tostring(v or "")
+                        SkeetUI.flags[text] = Box.Text
+                        if cb then cb(Box.Text) end
+                    end,
+                }
+
+                local api = {}
+                function api:Get() return Box.Text end
+                function api:Set(v) Box.Text = tostring(v) end
+                return api
             end
 
             -- ---------- label ----------
@@ -780,6 +895,48 @@ function SkeetUI:CreateWindow(titleText)
                 return api
             end
 
+            -- ---------- готовая секция конфигов ----------
+            function Section:AddConfigSystem()
+                local configName = "default"
+                local selectedConfig = nil
+                local statusLbl
+
+                Section:AddTextbox("config name", "default", function(v) configName = v end)
+
+                local dd = Section:AddDropdown("configs", (function()
+                    local list = SkeetUI:GetConfigs()
+                    return #list > 0 and list or { "-" }
+                end)(), nil, function(v) selectedConfig = v end)
+                -- дропдаун конфигов не должен попадать в сами конфиги
+                SkeetUI.items["configs"] = nil
+                SkeetUI.items["config name"] = nil
+
+                Section:AddButton("save", function()
+                    if SkeetUI:SaveConfig(configName) then
+                        statusLbl:Set("saved: " .. configName)
+                    else
+                        statusLbl:Set("save failed (no file access)")
+                    end
+                end)
+                Section:AddButton("load", function()
+                    local target = selectedConfig or configName
+                    if SkeetUI:LoadConfig(target) then
+                        statusLbl:Set("loaded: " .. target)
+                    else
+                        statusLbl:Set("load failed: " .. tostring(target))
+                    end
+                end)
+                Section:AddButton("delete", function()
+                    local target = selectedConfig or configName
+                    if SkeetUI:DeleteConfig(target) then
+                        statusLbl:Set("deleted: " .. target)
+                    else
+                        statusLbl:Set("delete failed")
+                    end
+                end)
+                statusLbl = Section:AddLabel("...")
+            end
+
             return Section
         end
         return Tab
@@ -788,3 +945,4 @@ function SkeetUI:CreateWindow(titleText)
 end
 
 return SkeetUI
+
